@@ -1,0 +1,13 @@
+# Workbench: {{ .Name }}
+description: {{ .Name }}        # shown by `wb list`
+# branch_prefix: ""        # e.g. "<user>/"; prepended to the branch name
+repositories:
+{{- range .Repos }}
+  - {{ . }}
+{{- else }}
+  # - owner/repo
+{{- end }}
+  # Long form, with optional per-repo settings:
+  # - repo: owner/repo
+  #   default_branch: main   # default: origin/HEAD
+  #   setup: "make deps"     # runs in each new worktree checkout
