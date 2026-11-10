@@ -85,6 +85,14 @@ golangci-lint run        # same linter as CI (config in .golangci.yml)
 CI (`.github/workflows/ci.yml`) runs vet and tests on Linux and macOS, lint, a `go mod tidy` check
 and a GoReleaser snapshot build on every pull request and push to `main`.
 
+Dependabot (`.github/dependabot.yml`) opens weekly updates for Go modules and GitHub Actions.
+`.github/workflows/dependabot-automerge.yml` turns on auto-merge for its patch and minor updates, so
+they merge once the required checks pass; major updates are left for review. For that to wait for
+CI, enable **Allow auto-merge** in the repository settings and add a branch protection rule (or
+ruleset) for `main` that requires the `test (ubuntu-latest)`, `test (macos-latest)`, `lint`,
+`go mod tidy` and `release dry run` checks.
+Without required checks GitHub merges immediately.
+
 ## Releasing
 
 Push a semver tag; `.github/workflows/release.yml` runs the tests and then GoReleaser, which builds
