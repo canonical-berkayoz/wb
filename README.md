@@ -27,7 +27,8 @@ wb new NAME [owner/repo...]              # create workbenches/NAME.yaml
 wb clone [REPO...] [--all] [--add]       # clone missing repos (parallel)
 wb sync [REPO...] [--all]                # fetch; fast-forward clean default branches
 
-wb worktree add NAME [REPO...] [--base REF]   # create or grow a worktree set, e.g. feat/add-rate-limiting
+wb worktree create NAME                  # start here: empty worktree (folder + branch name), no repos yet
+wb worktree add NAME [REPO...] [--base REF]   # add repos as you decide on them (creates NAME if missing)
 wb worktree list                         # dirty/ahead/behind per repo, untracked git worktrees
 wb worktree path [NAME] [REPO]           # cd "$(wb worktree path NAME REPO)"
 wb worktree remove [NAME] [REPO...] [--force]  # remove checkouts (branches are kept)
@@ -35,16 +36,21 @@ wb worktree remove [NAME] [REPO...] [--force]  # remove checkouts (branches are 
 
 Global flags go anywhere on the command line: `wb -w microk8s worktree list`.
 
-Worktree names can use conventional-commit style: `wb worktree add feat/add-rate-limiting api web`
-creates branch `feat/add-rate-limiting` (after the workbench's `branch_prefix`) in the flat folder
+Worktree names can use conventional-commit style: `wb worktree create feat/add-rate-limiting`
+creates branch name `feat/add-rate-limiting` (after the workbench's `branch_prefix`) and the flat folder
 `.worktrees/feat-add-rate-limiting/`. Either spelling refers to the same worktree afterwards. Names
 must not contain spaces (use dashes); `wb` rejects them.
+
+You don't need to know the repos up front: create the worktree first, then decide which repos
+belong to it and add each with `wb worktree add NAME REPO...` as you discover it. (`add` on a
+missing worktree creates it, so `wb worktree add NAME api web` is a shortcut when you already know.)
 
 | Flag / env                        | Meaning                                                           |
 |-----------------------------------|-------------------------------------------------------------------|
 | `-w`, `WB_WORKBENCH`              | Workbench to use (default: from the cwd, else picked)             |
 | `-R`, `WB_ROOT`                   | Folder containing `workbenches/` (default: found from the cwd)    |
-| `WB_CLONE_URL`                    | Clone URL template, default `git@github.com:{owner}/{repo}.git`   |
+| `WB_CLONE_PROTOCOL`               | `https` (default) or `ssh`, picks the GitHub clone URL            |
+| `WB_CLONE_URL`                    | Clone URL template with `{owner}`/`{repo}`; overrides the protocol |
 
 ## Workbench file
 
@@ -61,12 +67,79 @@ repositories:
 Per-repo settings are merged across workbenches; conflicting values are a config error. Setup
 runs with `WB_SOURCE`, `WB_CHECKOUT`, `WB_REPO`, `WB_WORKBENCH` and `WB_WORKTREE` set.
 
+## Hooks
+
+Hooks are shell commands (run with `sh -c`) that `wb` runs after a worktree changes. Declare them
+under `hooks:` in either config file:
+
+- user: `$XDG_CONFIG_HOME/wb/config.yaml` (default `~/.config/wb/config.yaml`)
+- project: `<root>/wb.yaml`
+
+Both files are optional. The project value overrides the user value per hook; an empty project
+value (`post_worktree_delete: ''`) switches a user hook off.
+
+```yaml
+hooks:
+  post_worktree_create: 'code "$WB_WORKTREE_DIR"'
+  post_worktree_repo_add: 'for r in $WB_REPOS; do echo "new: $r"; done'
+  post_worktree_repo_remove: 'echo "dropped: $WB_REPOS"'
+  post_worktree_delete: 'echo "deleted $WB_WORKTREE"'
+```
+
+| Hook                        | Runs                                                                                          |
+|-----------------------------|-----------------------------------------------------------------------------------------------|
+| `post_worktree_create`      | After the empty worktree folder and its state are created (`worktree create`, or `worktree add` on a missing worktree). |
+| `post_worktree_repo_add`    | After the repos of one `worktree add` call are checked out and their `setup` ran. Once per call, and only if a repo was newly added. |
+| `post_worktree_repo_remove` | After `worktree remove` took checkouts away. Once per call, for the repos removed.            |
+| `post_worktree_delete`      | After the worktree itself is gone: removing its last repo, or removing an empty worktree. Runs after `post_worktree_repo_remove`. |
+
+The working directory is the worktree root, `<root>/.worktrees/<slug>/`. Once that folder is
+deleted (the last repo went, or `post_worktree_delete`), it is `<root>`.
+
+Every hook gets these environment variables:
+
+| Variable          | Value                                                                                       |
+|-------------------|---------------------------------------------------------------------------------------------|
+| `WB_HOOK`         | the hook name, e.g. `post_worktree_repo_add`                                                |
+| `WB_ROOT`         | absolute root directory                                                                     |
+| `WB_WORKBENCH`    | workbench name, empty if none                                                               |
+| `WB_WORKTREE`     | worktree name, e.g. `feat/add-rate-limiting`                                                |
+| `WB_WORKTREE_DIR` | absolute worktree root, e.g. `<root>/.worktrees/feat-add-rate-limiting`                     |
+| `WB_BRANCH`       | full branch name, including the workbench `branch_prefix`                                   |
+| `WB_REPOS`        | space-separated `owner/repo` names affected by this call: newly added (`post_worktree_repo_add`), removed (`post_worktree_repo_remove`), empty for `post_worktree_create` and `post_worktree_delete` |
+
+The same data arrives as JSON on stdin, with the structured details of each repo:
+
+```json
+{
+  "hook": "post_worktree_repo_add",
+  "root": "/abs/root",
+  "workbench": "platform",
+  "worktree": "feat/add-rate-limiting",
+  "worktree_dir": "/abs/root/.worktrees/feat-add-rate-limiting",
+  "branch": "dev/feat/add-rate-limiting",
+  "repos": [
+    {"name": "acme/api", "checkout": "/abs/root/.worktrees/feat-add-rate-limiting/api", "base": "origin/main", "created": true}
+  ]
+}
+```
+
+`repos` is `[]` for `post_worktree_create` and `post_worktree_delete`. For `post_worktree_repo_add`
+it also lists repos of the call that were already present, with `"created": false` (they are not
+in `WB_REPOS`). For `post_worktree_repo_remove` it lists the removed repos with `"created": false`
+and `checkout` set to the removed path.
+
+Hooks run after the state is written. A failing hook prints its error and makes `wb` exit 1, but
+checkouts and removals are never rolled back. A config file with unknown keys or hooks is rejected
+before anything changes. The per-repo `setup` in the workbench file is separate and unchanged: it
+runs in each new checkout, before `post_worktree_repo_add`.
+
 ## Layout
 
 ```
 main.go                 calls cmd.Execute()
 cmd/                    cobra commands: root.go, then one file per command
-internal/{config,pool,manifest,worktree,root,names}/   logic
+internal/{config,pool,manifest,worktree,hooks,root,names}/   logic
 internal/{gitx,pick,parallel}/                         helpers (git, fzf/prompt, concurrency)
 ```
 

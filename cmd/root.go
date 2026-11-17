@@ -90,5 +90,5 @@ func (e *Env) reset(cmd *cobra.Command) {
 		Err:    e.err,
 		UseFzf: pick.IsTerminal(os.Stdin) && pick.IsTerminal(os.Stderr),
 	}
-	e.rootDir, e.cfg = "", nil
+	e.rootDir, e.cfg, e.hooks = "", nil, nil
 }

@@ -7,6 +7,7 @@ import (
 
 	"github.com/canonical/wb/internal/config"
 	"github.com/canonical/wb/internal/gitx"
+	"github.com/canonical/wb/internal/hooks"
 	"github.com/canonical/wb/internal/manifest"
 	"github.com/canonical/wb/internal/names"
 	"github.com/canonical/wb/internal/pick"
@@ -40,6 +41,41 @@ func (e *Env) pickRepos(workbench *config.Workbench) ([]string, error) {
 	return e.picker.Pick(append(items, rest...), true, "repos")
 }
 
+// openGroup loads the worktree called name, or describes a new one (not saved yet)
+// on the workbench's branch prefix. The workbench is nil for an existing group.
+func (e *Env) openGroup(name string) (group, existing *manifest.Group, workbench *config.Workbench, err error) {
+	slug, err := names.Slugify(name)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if _, err = e.Root(); err != nil {
+		return nil, nil, nil, err
+	}
+	if existing, err = manifest.Load(e.rootDir, slug); err != nil || existing != nil {
+		return existing, existing, nil, err
+	}
+	if workbench, err = e.Workbench(); err != nil {
+		return nil, nil, nil, err
+	}
+	branchName, err := names.BranchName(name)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	branch := workbench.BranchPrefix + branchName
+	if !gitx.ValidBranchName(branch) {
+		return nil, nil, nil, fmt.Errorf("%q is not a valid branch name", branch)
+	}
+	return manifest.NewGroup(e.rootDir, name, slug, branch, workbench.Name), nil, workbench, nil
+}
+
+func (e *Env) worktreeName(args []string) (string, []string, error) {
+	if len(args) > 0 {
+		return args[0], args[1:], nil
+	}
+	name, err := e.picker.Prompt("Worktree name, e.g. feat/add-rate-limiting")
+	return name, nil, err
+}
+
 var worktreeAddCmd = &cobra.Command{
 	Use:   "add [NAME] [REPO...]",
 	Short: "Create a worktree per repo on one shared branch, or grow an existing group",
@@ -48,35 +84,17 @@ var worktreeAddCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		var name string
-		if len(args) > 0 {
-			name, args = args[0], args[1:]
-		} else if name, err = env.picker.Prompt("Worktree name, e.g. feat/add-rate-limiting"); err != nil {
-			return err
-		}
-		slug, err := names.Slugify(name)
+		name, args, err := env.worktreeName(args)
 		if err != nil {
 			return err
 		}
-		existing, err := manifest.Load(env.rootDir, slug)
+		group, existing, workbench, err := env.openGroup(name)
 		if err != nil {
 			return err
 		}
-		group := existing
-		var workbench *config.Workbench
-		if existing == nil {
-			if workbench, err = env.Workbench(); err != nil {
-				return err
-			}
-			branchName, err := names.BranchName(name)
-			if err != nil {
-				return err
-			}
-			branch := workbench.BranchPrefix + branchName
-			if !gitx.ValidBranchName(branch) {
-				return fmt.Errorf("%q is not a valid branch name", branch)
-			}
-			group = manifest.NewGroup(env.rootDir, slug, branch, workbench.Name)
+		slug := group.Slug
+		if _, err := env.Hooks(); err != nil {
+			return err
 		}
 
 		var selected []string
@@ -100,14 +118,30 @@ var worktreeAddCmd = &cobra.Command{
 		}
 
 		fmt.Fprintf(env.out, "worktree %s on branch %s [%s]\n", slug, group.Branch, group.Workbench)
-		ok, err := worktree.AddRepos(cfg, group, selected, worktreeAddBase, func(line string) { fmt.Fprintln(env.out, line) })
+		if existing != nil && len(selected) == 0 {
+			fmt.Fprintf(env.out, "no repos yet; add some with: wb worktree add %s REPO...\n", slug)
+			return nil
+		}
+		added, ok, err := worktree.AddRepos(cfg, group, selected, worktreeAddBase, func(line string) { fmt.Fprintln(env.out, line) })
 		if err != nil {
 			return err
 		}
 		if len(group.Repos) > 0 {
 			fmt.Fprintf(env.out, "→ %s\n", group.Directory())
 		}
-		if !ok {
+
+		var events []hooks.Event
+		if existing == nil && len(group.Repos) > 0 {
+			events = append(events, hooks.Event{Hook: hooks.PostWorktreeCreate, Group: group})
+		}
+		repos := addedRepos(added)
+		for _, repo := range repos {
+			if repo.Created {
+				events = append(events, hooks.Event{Hook: hooks.PostWorktreeRepoAdd, Group: group, Repos: repos})
+				break
+			}
+		}
+		if !env.runHooks(events...) || !ok {
 			return errSilent
 		}
 		return nil

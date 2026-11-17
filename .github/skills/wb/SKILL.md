@@ -9,13 +9,13 @@ description: 'Use the `wb` CLI to manage a pool of git repositories, workbenches
 
 - **Pool**: every repo is cloned once, at `<root>/<owner>/<repo>`. Never clone repos by hand into the root; use `wb clone`.
 - **Workbench**: one file `<root>/workbenches/<name>.yaml` listing repos. A named, possibly overlapping view over the pool. It decides which repos `clone`/`sync` act on by default and sets the branch prefix.
-- **Worktree**: a named set of git worktrees on one shared branch, one per repo, at `<root>/.worktrees/<name>/<repo>/`. It may include any pool repo, not only the workbench's. State lives in `<root>/.worktrees/<name>/.wb-worktree.json`; do not edit it by hand.
+- **Worktree**: a named set of git worktrees on one shared branch, one per repo, at `<root>/.worktrees/<name>/<repo>/`. It starts empty (`worktree create`) and grows as you decide which repos the change touches; it may include any pool repo, not only the workbench's. State lives in `<root>/.worktrees/<name>/.wb-worktree.json`; do not edit it by hand.
 - **Root**: the folder containing `workbenches/`. Found from `-R/--root`, `$WB_ROOT`, or by walking up from the cwd.
 
 ## Rules for agents (read first)
 
 1. **Never trigger an interactive prompt.** `wb` prompts on stdin when an argument is missing, which hangs a non-interactive session. Always pass:
-   - the worktree name and the repos to `worktree add`,
+   - the worktree name to `worktree create`, and the worktree name and repos to `worktree add`,
    - the worktree name to `worktree path` and `worktree remove`,
    - `-w WORKBENCH` whenever the cwd is not inside a worktree or a pool repo and there is more than one workbench.
 2. **Discover before acting**: run `wb list` and `wb worktree list` first. They are read-only.
@@ -35,10 +35,11 @@ Global flags (accepted anywhere): `-w/--workbench NAME` (env `WB_WORKBENCH`), `-
 | `wb new NAME [owner/repo...] [--force]` | Create `workbenches/NAME.yaml` from a commented template. |
 | `wb clone [REPO...] [--all] [--add]` | Clone missing repos in parallel. Default: the workbench's repos. `--all`: whole pool. `--add`: allow `owner/repo` not in any workbench. |
 | `wb sync [REPO...] [--all]` | `git fetch --prune`; fast-forward the default branch only when clean and not diverged. |
-| `wb worktree add NAME [REPO...] [--base REF] [--add]` | Create the worktree set on branch `<branch_prefix>NAME`, or grow an existing one. |
+| `wb worktree create NAME` | **Start here.** Create the worktree folder, manifest and branch name with no repos. Fires `post_worktree_create`. |
+| `wb worktree add NAME [REPO...] [--base REF] [--add]` | Add repos to the worktree (creating it if missing); idempotent. Fires `post_worktree_create` (if it created the worktree), then `post_worktree_repo_add` (if a repo was newly added). |
 | `wb worktree list` | Per-repo `dirty N` / `clean`, `↑ahead ↓behind vs <base>`, plus "untracked worktrees" not created by wb. With `-w`, only that workbench's worktrees. |
 | `wb worktree path NAME [REPO]` | Print the worktree folder, or one checkout. |
-| `wb worktree remove NAME [REPO...] [--force]` | Remove checkouts; dirty ones are kept unless `--force`. Branch is kept. |
+| `wb worktree remove NAME [REPO...] [--force]` | Remove checkouts; dirty ones are kept unless `--force`. Branch is kept. Fires `post_worktree_repo_remove` for removed repos, then `post_worktree_delete` if the worktree is gone. Works on worktrees with no repos. |
 
 `REPO` is `owner/repo`, or just `repo` when the name is unique in the pool. If two repos share a name, use `owner/repo`; inside a worktree they get folders `<owner>-<repo>`.
 
@@ -63,11 +64,13 @@ Pick the type that matches the intent, and keep the description short and specif
 ```sh
 wb list
 wb -w platform clone                                      # ensure the pool has what the workbench lists
-wb -w platform worktree add feat/add-rate-limiting api web  # one branch, two checkouts
-cd "$(wb worktree path feat/add-rate-limiting api)"       # work here; commit with plain git
+wb -w platform worktree create feat/add-rate-limiting     # 1. the folder and branch name, no repos yet
+cd "$(wb worktree path feat/add-rate-limiting)"           # 2. start from the worktree folder
+wb worktree add feat/add-rate-limiting api                # 3. add each repo when you find the change needs it
+cd "$(wb worktree path feat/add-rate-limiting api)"       #    work in its checkout; commit with plain git
 ```
 
-Add another repo to the same change (even from another workbench): `wb worktree add feat/add-rate-limiting shared/lib`. Re-running `add` with no repos re-checks the existing set and is idempotent (`= repo (already present)`).
+Create the worktree first, then decide which repos belong to it as you learn what the change touches. Do not guess the full repo list up front. Repeat step 3 for every further repo (even from another workbench, e.g. `shared/lib`); `add` is idempotent (`= repo (already present)`), and several repos can be given at once (`worktree add NAME api web`). `add` also creates a missing worktree, so `worktree add NAME REPO...` is a shortcut when you already know the repos. An empty worktree shows `(no repos yet)` in `worktree list`; `worktree remove NAME` deletes it.
 
 ### Check progress
 
@@ -115,6 +118,14 @@ Only `repositories` is required. Per-repo settings are merged across workbenches
 
 `setup` runs with cwd = the new checkout and env `WB_SOURCE`, `WB_CHECKOUT`, `WB_REPO`, `WB_WORKBENCH`, `WB_WORKTREE`. A failing setup prints the last 15 lines, exits `1`, and does not stop other repos.
 
+## Hooks
+
+The user may configure shell hooks under `hooks:` in `$XDG_CONFIG_HOME/wb/config.yaml` (default `~/.config/wb/config.yaml`) and `<root>/wb.yaml`; the project file overrides the user file per key (`post_worktree_create`, `post_worktree_delete`, `post_worktree_repo_add`, `post_worktree_repo_remove`). They run with the worktree root as cwd (the root once the folder is gone) after the state changes, so a failing hook makes `wb` exit 1 but never undoes checkouts or removals: do not retry the `wb` command, fix the hook.
+
+- `post_worktree_repo_add` runs once per `worktree add` call, so repos added over several calls fire it several times, each time for just that call's new repos. It does not run if nothing new was added.
+- Env for every hook: `WB_HOOK`, `WB_ROOT`, `WB_WORKBENCH`, `WB_WORKTREE` (name, e.g. `feat/x`), `WB_WORKTREE_DIR` (absolute), `WB_BRANCH` (with prefix), `WB_REPOS` (space-separated `owner/repo`; new repos for `post_worktree_repo_add`, removed for `post_worktree_repo_remove`, empty for `post_worktree_create`/`post_worktree_delete`).
+- Stdin is JSON: `hook`, `root`, `workbench`, `worktree`, `worktree_dir`, `branch`, `repos[]` (`name`, `checkout`, `base`, `created`). `post_worktree_repo_add` also lists already present repos with `created: false`; `post_worktree_repo_remove` sets `checkout` to the removed path.
+
 ## Troubleshooting
 
 | Symptom | Cause / fix |
@@ -123,10 +134,12 @@ Only `repositories` is required. Per-repo settings are merged across workbenches
 | `unknown workbench "x" (known: …)` | Check `wb list`; names are file names without `.yaml`. |
 | `x is not in the pool; pass --add …` | The repo is in no workbench and not cloned. Use `--add` (clone) / `--add` (worktree add) only if the user wants it. |
 | `"x" is ambiguous …` | Two pool repos share a name; use `owner/repo`. |
+| `<file>: unknown hook …` / `invalid YAML` | A hook config file (`wb.yaml` or the user config) is invalid; fix it, nothing was changed. |
+| `post_worktree_repo_add hook failed …` | The hook failed after the repos were checked out; state is intact. Fix the hook; do not redo the `add`. |
 | `invalid workbench configuration: …` | Every problem is listed at once; fix the YAML files named. |
 | `cannot determine the default branch; set default_branch` | `origin/HEAD` is unset for that repo; add `default_branch:` in the workbench file. |
-| Clone fails with permission/host-key errors | Clones use SSH (`git@github.com:{owner}/{repo}.git`). Fix SSH access, or set `WB_CLONE_URL` to a template with `{owner}` and `{repo}` (for example an HTTPS URL). |
-| Command waits for input | You omitted an argument that triggers a picker. Interrupt and re-run with explicit arguments. |
+| Clone fails with permission/host-key errors | Clones use HTTPS by default (`https://github.com/{owner}/{repo}.git`). Fix credentials, set `WB_CLONE_PROTOCOL=ssh` to clone over SSH, or set `WB_CLONE_URL` to a template with `{owner}` and `{repo}`. |
+| Command waits for input | You omitted an argument that triggers a picker (e.g. `worktree add NAME` for a worktree that doesn't exist yet; use `worktree create NAME` instead). Interrupt and re-run with explicit arguments. |
 
 ## Install
 

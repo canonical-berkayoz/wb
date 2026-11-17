@@ -116,25 +116,42 @@ func runSetup(entry *manifest.RepoEntry, command string, group *manifest.Group) 
 	return 1, err.Error()
 }
 
+// Create saves a group with no repos, so they can be added later.
+func Create(group *manifest.Group) error {
+	if err := pool.EnsureIgnore(filepath.Join(group.Root, manifest.WorktreesDir)); err != nil {
+		return err
+	}
+	return manifest.Save(group)
+}
+
+// Added is a requested repo that is in the group after AddRepos; Created is false
+// when it was already there.
+type Added struct {
+	Entry   *manifest.RepoEntry
+	Created bool
+}
+
 // AddRepos checks out repos into the group, saves the manifest, then runs setup.
-// It returns true when everything succeeded.
-func AddRepos(cfg *config.Config, group *manifest.Group, repos []string, baseOpt string, report Report) (bool, error) {
+// It returns the requested repos that are now in the group, and true when everything succeeded.
+func AddRepos(cfg *config.Config, group *manifest.Group, repos []string, baseOpt string, report Report) ([]Added, bool, error) {
 	root := group.Root
 	var todo []string
+	var added []Added
 	seen := map[string]bool{}
 	for _, full := range repos {
 		if seen[full] {
 			continue
 		}
 		seen[full] = true
-		if group.Entry(full) != nil {
+		if entry := group.Entry(full); entry != nil {
 			report(fmt.Sprintf("= %s (already present)", full))
+			added = append(added, Added{entry, false})
 			continue
 		}
 		todo = append(todo, full)
 	}
 	if len(todo) == 0 {
-		return true, nil
+		return added, true, nil
 	}
 
 	all := make([]string, 0, len(group.Repos)+len(todo))
@@ -143,13 +160,13 @@ func AddRepos(cfg *config.Config, group *manifest.Group, repos []string, baseOpt
 	}
 	folders := names.CheckoutNames(append(all, todo...))
 	if err := pool.EnsureIgnore(filepath.Join(root, manifest.WorktreesDir)); err != nil {
-		return false, err
+		return nil, false, err
 	}
 	if err := os.MkdirAll(group.Directory(), 0o755); err != nil {
-		return false, err
+		return nil, false, err
 	}
 	if err := renameExisting(group, folders, report); err != nil {
-		return false, err
+		return nil, false, err
 	}
 
 	results := map[string]prepared{}
@@ -178,22 +195,24 @@ func AddRepos(cfg *config.Config, group *manifest.Group, repos []string, baseOpt
 			continue
 		}
 		group.Repos = append(group.Repos, result.entry)
+		added = append(added, Added{result.entry, result.created})
 		if result.created && cfg.SettingsFor(full).Setup != "" {
 			fresh = append(fresh, result.entry)
 		}
 	}
 	if len(group.Repos) > 0 {
 		if err := manifest.Save(group); err != nil {
-			return false, err
+			return nil, false, err
 		}
-	} else if _, err := os.Stat(group.Directory()); err == nil {
+	} else if _, err := os.Stat(group.ManifestPath()); err != nil {
+		// Nothing was added to a group that was never saved: leave no trace.
 		manifest.Delete(group)
 	}
 
 	if !runAllSetup(cfg, group, fresh, report) {
 		ok = false
 	}
-	return ok, nil
+	return added, ok, nil
 }
 
 type setupResult struct {
@@ -225,16 +244,25 @@ func runAllSetup(cfg *config.Config, group *manifest.Group, entries []*manifest.
 	return ok
 }
 
+// Removal is what RemoveRepos took away. Deleted is true when no repos are left,
+// so the worktree itself is gone.
+type Removal struct {
+	Removed []*manifest.RepoEntry
+	Deleted bool
+}
+
 // RemoveRepos removes the selected checkouts and keeps refused ones. It returns
 // true when everything selected was removed.
-func RemoveRepos(group *manifest.Group, selected []*manifest.RepoEntry, force bool, report Report) (bool, error) {
+func RemoveRepos(group *manifest.Group, selected []*manifest.RepoEntry, force bool, report Report) (Removal, bool, error) {
 	removed := map[*manifest.RepoEntry]bool{}
+	var result Removal
 	sources := map[string]bool{}
 	for _, entry := range selected {
 		sources[entry.Source] = true
 		if _, err := os.Stat(entry.Checkout); err != nil {
 			report(fmt.Sprintf("✓ %s (checkout already gone)", entry.Repo))
 			removed[entry] = true
+			result.Removed = append(result.Removed, entry)
 			continue
 		}
 		args := []string{"worktree", "remove"}
@@ -243,11 +271,12 @@ func RemoveRepos(group *manifest.Group, selected []*manifest.RepoEntry, force bo
 		}
 		res, err := gitx.Attempt(entry.Source, append(args, entry.Checkout)...)
 		if err != nil {
-			return false, err
+			return result, false, err
 		}
 		if res.OK() {
 			report(fmt.Sprintf("✓ %s removed", entry.Repo))
 			removed[entry] = true
+			result.Removed = append(result.Removed, entry)
 		} else {
 			report(fmt.Sprintf("✗ %s kept: %s", entry.Repo, gitx.FirstLine(res.Stderr)))
 		}
@@ -273,20 +302,21 @@ func RemoveRepos(group *manifest.Group, selected []*manifest.RepoEntry, force bo
 	group.Repos = remaining
 	if len(remaining) > 0 {
 		if err := manifest.Save(group); err != nil {
-			return false, err
+			return result, false, err
 		}
 		refused := len(selected) - len(removed)
 		if refused > 0 {
 			report("some checkouts were kept; inspect them, or rerun with --force to discard changes")
 		}
-		return refused == 0, nil
+		return result, refused == 0, nil
 	}
+	result.Deleted = true
 	if manifest.Delete(group) {
 		report(fmt.Sprintf("worktree %s removed (branch %s kept)", group.Slug, group.Branch))
 	} else {
 		report(fmt.Sprintf("note: %s still has content and was left in place", group.Directory()))
 	}
-	return true, nil
+	return result, true, nil
 }
 
 // RepoStatus summarizes one checkout as (changes, divergence).

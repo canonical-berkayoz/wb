@@ -10,6 +10,7 @@ import (
 
 	"github.com/canonical/wb/internal/config"
 	"github.com/canonical/wb/internal/gitx"
+	"github.com/canonical/wb/internal/hooks"
 	"github.com/canonical/wb/internal/manifest"
 	"github.com/canonical/wb/internal/names"
 	"github.com/canonical/wb/internal/pick"
@@ -28,6 +29,7 @@ type Env struct {
 
 	rootDir string
 	cfg     *config.Config
+	hooks   hooks.Config
 }
 
 func firstNonEmpty(values ...string) string {

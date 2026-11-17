@@ -290,11 +290,41 @@ func TestListAndNew(t *testing.T) {
 	contains(t, w.wb("list"), "fresh")
 }
 
+func TestWorktreeCreateEmptyThenAddReposLater(t *testing.T) {
+	w := newWorld(t)
+	w.twoWorkbenches()
+	contains(t, w.wb("-w", "ck8s", "worktree", "create", "feat/lazy"),
+		"worktree feat-lazy on branch me/feat/lazy [ck8s]")
+	if m := w.manifest("feat-lazy"); m.Branch != "me/feat/lazy" || len(m.Repos) != 0 {
+		t.Errorf("manifest = %+v", m)
+	}
+	if got := strings.TrimSpace(w.wb("worktree", "path", "feat/lazy")); got != w.path(".worktrees", "feat-lazy") {
+		t.Errorf("path = %q", got)
+	}
+	contains(t, w.wb("worktree", "create", "feat/lazy"), "already exists")
+	contains(t, w.wb("worktree", "add", "feat/lazy"), "no repos yet")
+	contains(t, w.wb("worktree", "list"), "feat-lazy  [ck8s]")
+
+	// a failed add must not delete the empty group
+	w.wbFails("worktree", "add", "feat/lazy", "nope/missing", "--add")
+	if !exists(w.path(".worktrees", "feat-lazy", ".wb-worktree.json")) {
+		t.Fatal("empty worktree was deleted by a failed add")
+	}
+
+	w.wb("worktree", "add", "feat/lazy", "k8s-snap")
+	if !exists(w.checkout("feat-lazy", "k8s-snap")) {
+		t.Error("repo was not added to the empty worktree")
+	}
+	if m := w.manifest("feat-lazy"); len(m.Repos) != 1 {
+		t.Errorf("manifest = %+v", m)
+	}
+}
+
 func TestEveryCommandRegisteredAndDocumented(t *testing.T) {
 	root := rootCmd
 	want := map[string][]string{
 		"":         {"clone", "list", "new", "sync", "worktree"},
-		"worktree": {"add", "list", "path", "remove"},
+		"worktree": {"add", "create", "list", "path", "remove"},
 	}
 	for parent, commands := range want {
 		cmd := root

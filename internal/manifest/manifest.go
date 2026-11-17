@@ -30,6 +30,7 @@ type RepoEntry struct {
 // Group is a named set of same-branch worktrees across repos, tracked by one manifest.
 type Group struct {
 	Root      string
+	Name      string // as given by the user, e.g. feat/add-rate-limiting
 	Slug      string
 	Branch    string
 	Workbench string
@@ -37,9 +38,9 @@ type Group struct {
 	Repos     []*RepoEntry
 }
 
-func NewGroup(root, slug, branch, workbench string) *Group {
+func NewGroup(root, name, slug, branch, workbench string) *Group {
 	return &Group{
-		Root: root, Slug: slug, Branch: branch, Workbench: workbench,
+		Root: root, Name: name, Slug: slug, Branch: branch, Workbench: workbench,
 		Created: time.Now().UTC().Format("2006-01-02T15:04:05+00:00"),
 	}
 }
@@ -86,6 +87,7 @@ type repoJSON struct {
 }
 
 type groupJSON struct {
+	Name      string     `json:"name,omitempty"`
 	Slug      string     `json:"slug"`
 	Branch    string     `json:"branch"`
 	Workbench string     `json:"workbench"`
@@ -105,7 +107,7 @@ func Save(g *Group) error {
 	if err := os.MkdirAll(g.Directory(), 0o755); err != nil {
 		return err
 	}
-	data := groupJSON{Slug: g.Slug, Branch: g.Branch, Workbench: g.Workbench, Created: g.Created, Repos: []repoJSON{}}
+	data := groupJSON{Name: g.Name, Slug: g.Slug, Branch: g.Branch, Workbench: g.Workbench, Created: g.Created, Repos: []repoJSON{}}
 	for _, entry := range g.Repos {
 		data.Repos = append(data.Repos, repoJSON{
 			Repo:     entry.Repo,
@@ -141,7 +143,10 @@ func Load(root, slug string) (*Group, error) {
 	if err := json.Unmarshal(raw, &data); err != nil {
 		return nil, fmt.Errorf("%s/%s: %w", slug, ManifestName, err)
 	}
-	group := &Group{Root: root, Slug: data.Slug, Branch: data.Branch, Workbench: data.Workbench, Created: data.Created}
+	group := &Group{Root: root, Name: data.Name, Slug: data.Slug, Branch: data.Branch, Workbench: data.Workbench, Created: data.Created}
+	if group.Name == "" {
+		group.Name = group.Slug // manifests written before names were recorded
+	}
 	for _, r := range data.Repos {
 		group.Repos = append(group.Repos, &RepoEntry{
 			Repo: r.Repo, Checkout: absolute(root, r.Checkout), Source: absolute(root, r.Source), Base: r.Base,

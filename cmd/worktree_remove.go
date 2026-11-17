@@ -5,6 +5,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/canonical/wb/internal/hooks"
 	"github.com/canonical/wb/internal/manifest"
 	"github.com/canonical/wb/internal/worktree"
 )
@@ -34,11 +35,21 @@ var worktreeRemoveCmd = &cobra.Command{
 				selected = append(selected, entry)
 			}
 		}
-		ok, err := worktree.RemoveRepos(group, selected, worktreeRemoveForce, func(line string) { fmt.Fprintln(env.out, line) })
+		if _, err := env.Hooks(); err != nil {
+			return err
+		}
+		removal, ok, err := worktree.RemoveRepos(group, selected, worktreeRemoveForce, func(line string) { fmt.Fprintln(env.out, line) })
 		if err != nil {
 			return err
 		}
-		if !ok {
+		var events []hooks.Event
+		if len(removal.Removed) > 0 {
+			events = append(events, hooks.Event{Hook: hooks.PostWorktreeRepoRemove, Group: group, Repos: removedRepos(removal.Removed)})
+		}
+		if removal.Deleted {
+			events = append(events, hooks.Event{Hook: hooks.PostWorktreeDelete, Group: group})
+		}
+		if !env.runHooks(events...) || !ok {
 			return errSilent
 		}
 		return nil

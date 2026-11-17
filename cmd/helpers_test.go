@@ -69,6 +69,7 @@ func newWorld(t *testing.T) *world {
 		t.Setenv("GIT_"+who+"_NAME", "Test")
 		t.Setenv("GIT_"+who+"_EMAIL", "test@example.com")
 	}
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, "xdg"))
 	t.Setenv("WB_ROOT", "")
 	t.Setenv("WB_WORKBENCH", "")
 

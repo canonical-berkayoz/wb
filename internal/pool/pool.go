@@ -13,7 +13,10 @@ import (
 	"github.com/canonical/wb/internal/names"
 )
 
-const defaultCloneURL = "git@github.com:{owner}/{repo}.git"
+const (
+	httpsCloneURL = "https://github.com/{owner}/{repo}.git"
+	sshCloneURL   = "git@github.com:{owner}/{repo}.git"
+)
 
 func RepoDir(root, full string) string {
 	owner, name := names.Split(full)
@@ -25,11 +28,15 @@ func IsCloned(root, full string) bool {
 	return err == nil
 }
 
-// CloneURL expands $WB_CLONE_URL ({owner} and {repo} placeholders), SSH by default.
+// CloneURL expands $WB_CLONE_URL ({owner} and {repo} placeholders). Without it, clones use
+// HTTPS, or SSH when WB_CLONE_PROTOCOL=ssh.
 func CloneURL(full string) string {
 	template := os.Getenv("WB_CLONE_URL")
 	if template == "" {
-		template = defaultCloneURL
+		template = httpsCloneURL
+		if strings.EqualFold(os.Getenv("WB_CLONE_PROTOCOL"), "ssh") {
+			template = sshCloneURL
+		}
 	}
 	owner, name := names.Split(full)
 	return strings.NewReplacer("{owner}", owner, "{repo}", name).Replace(template)

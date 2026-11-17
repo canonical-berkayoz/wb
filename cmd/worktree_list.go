@@ -33,6 +33,9 @@ var worktreeListCmd = &cobra.Command{
 		}
 		for _, group := range shown {
 			fmt.Fprintf(env.out, "%s  [%s]  branch %s\n", group.Slug, group.Workbench, group.Branch)
+			if len(group.Repos) == 0 {
+				fmt.Fprintln(env.out, "  (no repos yet)")
+			}
 			for _, entry := range group.Repos {
 				changes, divergence := worktree.RepoStatus(entry)
 				fmt.Fprintf(env.out, "  %-40s %-9s %s\n", entry.Repo, changes, divergence)

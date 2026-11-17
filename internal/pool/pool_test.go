@@ -26,8 +26,13 @@ func TestResolve(t *testing.T) {
 	}
 }
 
-func TestCloneURLDefaultsToSSH(t *testing.T) {
+func TestCloneURL(t *testing.T) {
 	t.Setenv("WB_CLONE_URL", "")
+	t.Setenv("WB_CLONE_PROTOCOL", "")
+	if got := pool.CloneURL("canonical/k8s-snap"); got != "https://github.com/canonical/k8s-snap.git" {
+		t.Errorf("CloneURL = %q", got)
+	}
+	t.Setenv("WB_CLONE_PROTOCOL", "ssh")
 	if got := pool.CloneURL("canonical/k8s-snap"); got != "git@github.com:canonical/k8s-snap.git" {
 		t.Errorf("CloneURL = %q", got)
 	}
