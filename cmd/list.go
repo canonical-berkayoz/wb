@@ -20,7 +20,7 @@ var listCmd = &cobra.Command{
 			return err
 		}
 		if len(cfg.Workbenches) == 0 {
-			fmt.Fprintf(env.out, "no workbenches in %s/workbenches; create one with `wb new`\n", env.rootDir)
+			fmt.Fprintf(env.out, "no workbenches in %s/.wb/workbenches; create one with `wb new`\n", env.rootDir)
 			return nil
 		}
 		groups, err := manifest.All(env.rootDir)

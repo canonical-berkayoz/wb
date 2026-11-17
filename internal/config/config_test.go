@@ -11,7 +11,7 @@ import (
 
 func writeWorkbench(t *testing.T, root, name, content string) {
 	t.Helper()
-	dir := filepath.Join(root, "workbenches")
+	dir := filepath.Join(root, ".wb", "workbenches")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}

@@ -23,7 +23,7 @@ type hookPayload struct {
 	} `json:"repos"`
 }
 
-// recordAllHooks writes a project wb.yaml whose hooks dump their environment, cwd and stdin
+// recordAllHooks writes a project .wb/config.yaml whose hooks dump their environment, cwd and stdin
 // to <root>/<hook>.{env,pwd,json}.
 func (w *world) recordAllHooks() {
 	record := `printf '%s|%s|%s|%s|%s|%s|%s' "$WB_HOOK" "$WB_ROOT" "$WB_WORKBENCH" "$WB_WORKTREE" "$WB_WORKTREE_DIR" "$WB_BRANCH" "$WB_REPOS" > "$WB_ROOT/$WB_HOOK.env"; pwd > "$WB_ROOT/$WB_HOOK.pwd"; cat > "$WB_ROOT/$WB_HOOK.json"`
@@ -32,7 +32,7 @@ func (w *world) recordAllHooks() {
 	for _, hook := range []string{"post_worktree_create", "post_worktree_delete", "post_worktree_repo_add", "post_worktree_repo_remove"} {
 		text += "  " + hook + ": |\n    " + record + "\n"
 	}
-	write(w.t, w.path("wb.yaml"), text)
+	write(w.t, w.path(".wb", "config.yaml"), text)
 }
 
 // hookRan returns the recorded env fields, cwd and stdin payload of the last run of hook,
@@ -151,7 +151,7 @@ func TestProjectHooksOverrideUserHooksPerKey(t *testing.T) {
 		t.Errorf("user post_worktree_create did not run: %q", got)
 	}
 
-	write(t, w.path("wb.yaml"), "hooks:\n  post_worktree_create: 'echo project > \"$WB_ROOT/created\"'\n  post_worktree_delete: ''\n")
+	write(t, w.path(".wb", "config.yaml"), "hooks:\n  post_worktree_create: 'echo project > \"$WB_ROOT/created\"'\n  post_worktree_delete: ''\n")
 	w.wb("-w", "ck8s", "worktree", "create", "feat/project")
 	if got := strings.TrimSpace(read(t, w.path("created"))); got != "project" {
 		t.Errorf("project post_worktree_create did not override: %q", got)
@@ -169,7 +169,7 @@ func TestProjectHooksOverrideUserHooksPerKey(t *testing.T) {
 func TestFailingHookExitsOneAndKeepsState(t *testing.T) {
 	w := newWorld(t)
 	w.twoWorkbenches()
-	write(t, w.path("wb.yaml"), "hooks:\n  post_worktree_repo_add: 'echo boom >&2; exit 3'\n  post_worktree_repo_remove: 'exit 4'\n")
+	write(t, w.path(".wb", "config.yaml"), "hooks:\n  post_worktree_repo_add: 'echo boom >&2; exit 3'\n  post_worktree_repo_remove: 'exit 4'\n")
 
 	out := w.wbFails("-w", "ck8s", "worktree", "add", "feat/fail", "k8s-snap")
 	contains(t, out, "post_worktree_repo_add hook failed", "boom")
@@ -189,7 +189,7 @@ func TestFailingHookExitsOneAndKeepsState(t *testing.T) {
 func TestInvalidHookConfigIsRejectedBeforeAnyChange(t *testing.T) {
 	w := newWorld(t)
 	w.twoWorkbenches()
-	write(t, w.path("wb.yaml"), "hooks:\n  post_typo: 'true'\n")
+	write(t, w.path(".wb", "config.yaml"), "hooks:\n  post_typo: 'true'\n")
 	contains(t, w.wbFails("-w", "ck8s", "worktree", "create", "feat/x"), "unknown hook \"post_typo\"")
 	if exists(w.path(".worktrees", "feat-x")) {
 		t.Error("worktree was created despite an invalid config")

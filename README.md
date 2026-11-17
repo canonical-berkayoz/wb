@@ -3,7 +3,7 @@
 Manage a pool of git repositories and the work that spans them.
 
 - **Repo pool**: every repo is cloned once, at `<root>/<owner>/<repo>`.
-- **Workbench**: one file in `<root>/workbenches/<name>.yaml` listing repos. A named, possibly
+- **Workbench**: one file in `<root>/.wb/workbenches/<name>.yaml` listing repos. A named, possibly
   overlapping view over the pool that sets defaults (repos offered, branch prefix).
 - **Worktree**: a named set of git worktrees on one shared branch, one per repo, under
   `<root>/.worktrees/<name>/`. It can include any pool repo, not only the workbench's.
@@ -23,7 +23,7 @@ pickers fall back to numbered prompts).
 
 ```sh
 wb list                                  # workbenches, cloned/total, open worktrees
-wb new NAME [owner/repo...]              # create workbenches/NAME.yaml
+wb new NAME [owner/repo...]              # create .wb/workbenches/NAME.yaml
 wb clone [REPO...] [--all] [--add]       # clone missing repos (parallel)
 wb sync [REPO...] [--all]                # fetch; fast-forward clean default branches
 
@@ -48,7 +48,7 @@ missing worktree creates it, so `wb worktree add NAME api web` is a shortcut whe
 | Flag / env                        | Meaning                                                           |
 |-----------------------------------|-------------------------------------------------------------------|
 | `-w`, `WB_WORKBENCH`              | Workbench to use (default: from the cwd, else picked)             |
-| `-R`, `WB_ROOT`                   | Folder containing `workbenches/` (default: found from the cwd)    |
+| `-R`, `WB_ROOT`                   | Folder containing `.wb/` (default: found from the cwd)    |
 | `WB_CLONE_PROTOCOL`               | `https` (default) or `ssh`, picks the GitHub clone URL            |
 | `WB_CLONE_URL`                    | Clone URL template with `{owner}`/`{repo}`; overrides the protocol |
 
@@ -73,7 +73,7 @@ Hooks are shell commands (run with `sh -c`) that `wb` runs after a worktree chan
 under `hooks:` in either config file:
 
 - user: `$XDG_CONFIG_HOME/wb/config.yaml` (default `~/.config/wb/config.yaml`)
-- project: `<root>/wb.yaml`
+- project: `<root>/.wb/config.yaml`
 
 Both files are optional. The project value overrides the user value per hook; an empty project
 value (`post_worktree_delete: ''`) switches a user hook off.

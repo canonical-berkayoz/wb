@@ -284,7 +284,7 @@ func TestListAndNew(t *testing.T) {
 	contains(t, out, "ck8s", "2/2 cloned", "CK8s", "rocks", "1/3 cloned")
 
 	w.wb("new", "fresh", "x/y")
-	contains(t, read(t, w.path("workbenches", "fresh.yaml")), "- x/y")
+	contains(t, read(t, w.path(".wb", "workbenches", "fresh.yaml")), "- x/y")
 	w.wbFails("new", "fresh")
 	w.wb("new", "fresh", "--force")
 	contains(t, w.wb("list"), "fresh")

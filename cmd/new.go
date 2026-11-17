@@ -24,7 +24,7 @@ var newForce bool
 
 var newCmd = &cobra.Command{
 	Use:   "new NAME [owner/repo...]",
-	Short: "Create workbenches/NAME.yaml from a commented template",
+	Short: "Create .wb/workbenches/NAME.yaml from a commented template",
 	Args:  cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name, repos := args[0], args[1:]

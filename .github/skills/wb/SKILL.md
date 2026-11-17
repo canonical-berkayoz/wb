@@ -8,9 +8,9 @@ description: 'Use the `wb` CLI to manage a pool of git repositories, workbenches
 ## Concepts
 
 - **Pool**: every repo is cloned once, at `<root>/<owner>/<repo>`. Never clone repos by hand into the root; use `wb clone`.
-- **Workbench**: one file `<root>/workbenches/<name>.yaml` listing repos. A named, possibly overlapping view over the pool. It decides which repos `clone`/`sync` act on by default and sets the branch prefix.
+- **Workbench**: one file `<root>/.wb/workbenches/<name>.yaml` listing repos. A named, possibly overlapping view over the pool. It decides which repos `clone`/`sync` act on by default and sets the branch prefix.
 - **Worktree**: a named set of git worktrees on one shared branch, one per repo, at `<root>/.worktrees/<name>/<repo>/`. It starts empty (`worktree create`) and grows as you decide which repos the change touches; it may include any pool repo, not only the workbench's. State lives in `<root>/.worktrees/<name>/.wb-worktree.json`; do not edit it by hand.
-- **Root**: the folder containing `workbenches/`. Found from `-R/--root`, `$WB_ROOT`, or by walking up from the cwd.
+- **Root**: the folder containing `.wb/`. Found from `-R/--root`, `$WB_ROOT`, or by walking up from the cwd.
 
 ## Rules for agents (read first)
 
@@ -32,7 +32,7 @@ Global flags (accepted anywhere): `-w/--workbench NAME` (env `WB_WORKBENCH`), `-
 | Command | Purpose |
 |---|---|
 | `wb list` | Workbenches with `cloned/total` repos and open worktree counts. |
-| `wb new NAME [owner/repo...] [--force]` | Create `workbenches/NAME.yaml` from a commented template. |
+| `wb new NAME [owner/repo...] [--force]` | Create `.wb/workbenches/NAME.yaml` from a commented template. |
 | `wb clone [REPO...] [--all] [--add]` | Clone missing repos in parallel. Default: the workbench's repos. `--all`: whole pool. `--add`: allow `owner/repo` not in any workbench. |
 | `wb sync [REPO...] [--all]` | `git fetch --prune`; fast-forward the default branch only when clean and not diverged. |
 | `wb worktree create NAME` | **Start here.** Create the worktree folder, manifest and branch name with no repos. Fires `post_worktree_create`. |
@@ -102,7 +102,7 @@ If it prints `✗ <repo> kept: … contains modified or untracked files`, commit
 wb new platform acme/api acme/web
 ```
 
-Then edit `workbenches/platform.yaml`:
+Then edit `.wb/workbenches/platform.yaml`:
 
 ```yaml
 description: Platform services        # shown by `wb list`
@@ -120,7 +120,7 @@ Only `repositories` is required. Per-repo settings are merged across workbenches
 
 ## Hooks
 
-The user may configure shell hooks under `hooks:` in `$XDG_CONFIG_HOME/wb/config.yaml` (default `~/.config/wb/config.yaml`) and `<root>/wb.yaml`; the project file overrides the user file per key (`post_worktree_create`, `post_worktree_delete`, `post_worktree_repo_add`, `post_worktree_repo_remove`). They run with the worktree root as cwd (the root once the folder is gone) after the state changes, so a failing hook makes `wb` exit 1 but never undoes checkouts or removals: do not retry the `wb` command, fix the hook.
+The user may configure shell hooks under `hooks:` in `$XDG_CONFIG_HOME/wb/config.yaml` (default `~/.config/wb/config.yaml`) and `<root>/.wb/config.yaml`; the project file overrides the user file per key (`post_worktree_create`, `post_worktree_delete`, `post_worktree_repo_add`, `post_worktree_repo_remove`). They run with the worktree root as cwd (the root once the folder is gone) after the state changes, so a failing hook makes `wb` exit 1 but never undoes checkouts or removals: do not retry the `wb` command, fix the hook.
 
 - `post_worktree_repo_add` runs once per `worktree add` call, so repos added over several calls fire it several times, each time for just that call's new repos. It does not run if nothing new was added.
 - Env for every hook: `WB_HOOK`, `WB_ROOT`, `WB_WORKBENCH`, `WB_WORKTREE` (name, e.g. `feat/x`), `WB_WORKTREE_DIR` (absolute), `WB_BRANCH` (with prefix), `WB_REPOS` (space-separated `owner/repo`; new repos for `post_worktree_repo_add`, removed for `post_worktree_repo_remove`, empty for `post_worktree_create`/`post_worktree_delete`).
@@ -134,7 +134,7 @@ The user may configure shell hooks under `hooks:` in `$XDG_CONFIG_HOME/wb/config
 | `unknown workbench "x" (known: …)` | Check `wb list`; names are file names without `.yaml`. |
 | `x is not in the pool; pass --add …` | The repo is in no workbench and not cloned. Use `--add` (clone) / `--add` (worktree add) only if the user wants it. |
 | `"x" is ambiguous …` | Two pool repos share a name; use `owner/repo`. |
-| `<file>: unknown hook …` / `invalid YAML` | A hook config file (`wb.yaml` or the user config) is invalid; fix it, nothing was changed. |
+| `<file>: unknown hook …` / `invalid YAML` | A hook config file (`.wb/config.yaml` or the user config) is invalid; fix it, nothing was changed. |
 | `post_worktree_repo_add hook failed …` | The hook failed after the repos were checked out; state is intact. Fix the hook; do not redo the `add`. |
 | `invalid workbench configuration: …` | Every problem is listed at once; fix the YAML files named. |
 | `cannot determine the default branch; set default_branch` | `origin/HEAD` is unset for that repo; add `default_branch:` in the workbench file. |

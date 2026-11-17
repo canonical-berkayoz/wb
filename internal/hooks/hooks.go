@@ -25,7 +25,7 @@ const (
 	PostWorktreeRepoAdd    = "post_worktree_repo_add"
 	PostWorktreeRepoRemove = "post_worktree_repo_remove"
 
-	ProjectFile = "wb.yaml"
+	ProjectFile = ".wb/config.yaml"
 )
 
 var known = map[string]bool{

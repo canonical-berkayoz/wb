@@ -79,7 +79,7 @@ func run(args []string, in io.Reader, out, errOut io.Writer) int {
 
 func init() {
 	rootCmd.PersistentFlags().StringVarP(&env.workbenchFlag, "workbench", "w", "", "workbench to use (env WB_WORKBENCH)")
-	rootCmd.PersistentFlags().StringVarP(&env.rootFlag, "root", "R", "", "folder containing workbenches/ (env WB_ROOT)")
+	rootCmd.PersistentFlags().StringVarP(&env.rootFlag, "root", "R", "", "folder containing .wb/ (env WB_ROOT)")
 }
 
 // reset prepares env for a new invocation: fresh streams, picker and caches.

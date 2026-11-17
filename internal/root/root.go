@@ -1,4 +1,4 @@
-// Package root finds the folder that holds workbenches/.
+// Package root finds the folder that holds .wb/.
 package root
 
 import (
@@ -23,14 +23,14 @@ func Cwd() string {
 	return home
 }
 
-func hasWorkbenches(dir string) bool {
-	info, err := os.Stat(filepath.Join(dir, config.WorkbenchesDir))
+func hasWbDir(dir string) bool {
+	info, err := os.Stat(filepath.Join(dir, config.Dir))
 	return err == nil && info.IsDir()
 }
 
 func walkUp(start string) string {
 	for dir := start; ; dir = filepath.Dir(dir) {
-		if hasWorkbenches(dir) {
+		if hasWbDir(dir) {
 			return dir
 		}
 		if filepath.Dir(dir) == dir {
@@ -48,7 +48,7 @@ func expandHome(path string) string {
 	return path
 }
 
-// Find returns the folder containing workbenches/, found from wherever wb runs.
+// Find returns the folder containing .wb/, found from wherever wb runs.
 func Find(explicit string) (string, error) {
 	if explicit != "" {
 		return gitx.RealPath(expandHome(explicit)), nil
@@ -64,8 +64,8 @@ func Find(explicit string) (string, error) {
 			}
 		}
 	}
-	if hasWorkbenches(fallbackRoot) {
+	if hasWbDir(fallbackRoot) {
 		return fallbackRoot, nil
 	}
-	return "", errors.New("could not find a root (a folder containing workbenches/); use -R/--root or $WB_ROOT")
+	return "", errors.New("could not find a root (a folder containing .wb/); use -R/--root or $WB_ROOT")
 }

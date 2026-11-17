@@ -101,7 +101,7 @@ func (w *world) remote(full string) {
 
 func (w *world) workbench(name, text string) {
 	w.t.Helper()
-	write(w.t, filepath.Join(w.root, "workbenches", name+".yaml"), text)
+	write(w.t, filepath.Join(w.root, ".wb", "workbenches", name+".yaml"), text)
 }
 
 func (w *world) checkout(slug, name string) string {

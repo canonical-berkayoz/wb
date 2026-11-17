@@ -13,7 +13,11 @@ import (
 	"github.com/canonical/wb/internal/names"
 )
 
-const WorkbenchesDir = "workbenches"
+// Dir is the folder under the root that holds all wb project files.
+const Dir = ".wb"
+
+// WorkbenchesDir is the workbench folder, relative to the root.
+var WorkbenchesDir = filepath.Join(Dir, "workbenches")
 
 var (
 	workbenchKeys = map[string]bool{"description": true, "branch_prefix": true, "repositories": true}
