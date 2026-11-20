@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -17,7 +18,28 @@ import (
 var (
 	worktreeAddBase string
 	worktreeAddAdd  bool
+
+	worktreeAddCreate bool
 )
+
+// parseRepoArg splits REPO[@BRANCH | @REMOTE:BRANCH] into the repo and the requested branch.
+func parseRepoArg(arg string) (repo, branch, remote string, err error) {
+	repo, ref, hasRef := strings.Cut(arg, "@")
+	if !hasRef {
+		return repo, "", "", nil
+	}
+	branch = ref
+	if before, after, found := strings.Cut(ref, ":"); found {
+		remote, branch = before, after
+		if remote == "" || strings.ContainsAny(remote, " \t") {
+			return "", "", "", fmt.Errorf("%q: invalid remote name in %s", arg, ref)
+		}
+	}
+	if !gitx.ValidBranchName(branch) {
+		return "", "", "", fmt.Errorf("%q: %q is not a valid branch name", arg, branch)
+	}
+	return repo, branch, remote, nil
+}
 
 func (e *Env) pickRepos(workbench *config.Workbench) ([]string, error) {
 	all, err := e.Pool()
@@ -76,9 +98,27 @@ func (e *Env) worktreeName(args []string) (string, []string, error) {
 	return name, nil, err
 }
 
+func explicitBranches(specs []worktree.RepoSpec) bool {
+	for _, spec := range specs {
+		if spec.Branch != "" {
+			return true
+		}
+	}
+	return false
+}
+
 var worktreeAddCmd = &cobra.Command{
-	Use:   "add [NAME] [REPO...]",
-	Short: "Create a worktree per repo on one shared branch, or grow an existing group",
+	Use:   "add [NAME] [REPO[@BRANCH | @REMOTE:BRANCH]...]",
+	Short: "Create a worktree per repo (new branch, or an existing one with REPO@BRANCH), or grow an existing group",
+	Long: `Add repos to the worktree NAME, creating it if missing.
+
+  REPO                  a new branch named after the worktree, from the default branch
+  REPO@BRANCH           exactly BRANCH (case kept, no prefix): the local branch, or one created
+                        from origin/BRANCH with that upstream so "git push" updates it
+  REPO@REMOTE:BRANCH    the same, taking BRANCH from the git remote REMOTE (e.g. a fork)
+
+Each repo can be on a different branch. A BRANCH that exists nowhere is an error unless
+--create is given, which starts it from the base. wb never adds remotes: use "git remote add".`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := env.Config()
 		if err != nil {
@@ -97,32 +137,44 @@ var worktreeAddCmd = &cobra.Command{
 			return err
 		}
 
-		var selected []string
+		var selected []worktree.RepoSpec
 		switch {
 		case len(args) > 0:
 			for _, arg := range args {
-				full, err := env.Resolve(arg, worktreeAddAdd)
+				name, branch, remote, err := parseRepoArg(arg)
 				if err != nil {
 					return err
 				}
-				selected = append(selected, full)
+				full, err := env.Resolve(name, worktreeAddAdd)
+				if err != nil {
+					return err
+				}
+				selected = append(selected, worktree.RepoSpec{Repo: full, Branch: branch, Remote: remote})
 			}
 		case existing != nil:
 			for _, entry := range existing.Repos {
-				selected = append(selected, entry.Repo)
+				selected = append(selected, worktree.RepoSpec{Repo: entry.Repo})
 			}
 		default:
-			if selected, err = env.pickRepos(workbench); err != nil {
+			picked, err := env.pickRepos(workbench)
+			if err != nil {
 				return err
+			}
+			for _, full := range picked {
+				selected = append(selected, worktree.RepoSpec{Repo: full})
 			}
 		}
 
-		fmt.Fprintf(env.out, "worktree %s on branch %s [%s]\n", slug, group.Branch, group.Workbench)
+		if explicitBranches(selected) {
+			fmt.Fprintf(env.out, "worktree %s [%s]\n", slug, group.Workbench)
+		} else {
+			fmt.Fprintf(env.out, "worktree %s on branch %s [%s]\n", slug, group.Branch, group.Workbench)
+		}
 		if existing != nil && len(selected) == 0 {
 			fmt.Fprintf(env.out, "no repos yet; add some with: wb worktree add %s REPO...\n", slug)
 			return nil
 		}
-		added, ok, err := worktree.AddRepos(cfg, group, selected, worktreeAddBase, func(line string) { fmt.Fprintln(env.out, line) })
+		added, ok, err := worktree.AddRepos(cfg, group, selected, worktreeAddBase, worktreeAddCreate, func(line string) { fmt.Fprintln(env.out, line) })
 		if err != nil {
 			return err
 		}
@@ -151,5 +203,6 @@ var worktreeAddCmd = &cobra.Command{
 func init() {
 	worktreeCmd.AddCommand(worktreeAddCmd)
 	worktreeAddCmd.Flags().StringVar(&worktreeAddBase, "base", "", "base ref (default: origin/<default branch>)")
+	worktreeAddCmd.Flags().BoolVar(&worktreeAddCreate, "create", false, "start REPO@BRANCH from the base when BRANCH does not exist")
 	worktreeAddCmd.Flags().BoolVar(&worktreeAddAdd, "add", false, "allow owner/repo not in any workbench")
 }

@@ -13,7 +13,8 @@ type manifestFile struct {
 	Branch    string `json:"branch"`
 	Workbench string `json:"workbench"`
 	Repos     []struct {
-		Repo string `json:"repo"`
+		Repo   string `json:"repo"`
+		Branch string `json:"branch"`
 	} `json:"repos"`
 }
 

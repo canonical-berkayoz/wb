@@ -108,11 +108,12 @@ func loadFile(path string) (Config, error) {
 	return file, nil
 }
 
-// Repo is one repo a hook call is about. For post_worktree_repo_remove, Checkout is the removed path.
+// Repo is one repo a hook call is about; Branch is the branch checked out there. For post_worktree_repo_remove, Checkout is the removed path.
 type Repo struct {
 	Name     string `json:"name"`
 	Checkout string `json:"checkout"`
 	Base     string `json:"base"`
+	Branch   string `json:"branch"`
 	Created  bool   `json:"created"`
 }
 

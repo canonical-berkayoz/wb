@@ -1,4 +1,4 @@
-// Package worktree creates and removes same-branch worktrees across pool repos.
+// Package worktree creates and removes worktrees across pool repos, each repo on its own branch.
 package worktree
 
 import (
@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -59,12 +60,63 @@ func renameExisting(group *manifest.Group, folders map[string]string, report Rep
 	return nil
 }
 
-func addCheckout(root string, cfg *config.Config, group *manifest.Group, full, checkout, baseOpt string) (prepared, error) {
+// RepoSpec is a repo to add and the branch it should be on. An empty Branch means a
+// new branch named after the worktree. A non-empty Branch is used exactly as given and
+// must already exist, unless the caller allows creating it. Remote names the remote that
+// holds Branch; it defaults to origin.
+type RepoSpec struct {
+	Repo   string
+	Branch string
+	Remote string
+}
+
+func (s RepoSpec) remote() string {
+	if s.Remote == "" {
+		return "origin"
+	}
+	return s.Remote
+}
+
+func fetch(source, full string, spec RepoSpec) error {
+	if _, err := gitx.Run(source, "fetch", "origin"); err != nil {
+		return err
+	}
+	remote := spec.remote()
+	if remote == "origin" {
+		return nil
+	}
+	if !slices.Contains(gitx.Remotes(source), remote) {
+		return fmt.Errorf("%s has no remote %q; add it with: git -C %s remote add %s URL", full, remote, source, remote)
+	}
+	_, err := gitx.Run(source, "fetch", remote)
+	return err
+}
+
+// addBranchWorktree creates the checkout for a requested branch: the local branch if it
+// exists, else a local branch tracking <remote>/<branch> so that git push updates it.
+func addBranchWorktree(source, checkout, base string, spec RepoSpec, create bool) error {
+	remote := spec.remote()
+	var err error
+	switch {
+	case gitx.BranchExists(source, spec.Branch):
+		_, err = gitx.Run(source, "worktree", "add", checkout, spec.Branch)
+	case gitx.RefExists(source, "refs/remotes/"+remote+"/"+spec.Branch):
+		_, err = gitx.Run(source, "worktree", "add", "--track", "-b", spec.Branch, checkout, remote+"/"+spec.Branch)
+	case create:
+		_, err = gitx.Run(source, "worktree", "add", "--no-track", "-b", spec.Branch, checkout, base)
+	default:
+		err = fmt.Errorf("branch %q does not exist locally or on %s; check the name, or pass --create to start it from %s", spec.Branch, remote, base)
+	}
+	return err
+}
+
+func addCheckout(root string, cfg *config.Config, group *manifest.Group, spec RepoSpec, checkout, baseOpt string, create bool) (prepared, error) {
+	full := spec.Repo
 	source, err := pool.EnsureCloned(root, full)
 	if err != nil {
 		return prepared{}, err
 	}
-	if _, err := gitx.Run(source, "fetch", "origin"); err != nil {
+	if err := fetch(source, full, spec); err != nil {
 		return prepared{}, err
 	}
 	base := baseOpt
@@ -78,17 +130,23 @@ func addCheckout(root string, cfg *config.Config, group *manifest.Group, full, c
 	if !gitx.RefExists(source, base) {
 		return prepared{}, fmt.Errorf("base %q does not exist in %s", base, full)
 	}
-	entry := &manifest.RepoEntry{Repo: full, Checkout: checkout, Source: source, Base: base}
+	branch := spec.Branch
+	if branch == "" {
+		branch = group.Branch
+	}
+	entry := &manifest.RepoEntry{Repo: full, Checkout: checkout, Source: source, Base: base, Branch: branch}
 	if _, err := os.Stat(checkout); err == nil {
 		if registered(source, checkout) {
 			return prepared{entry, false}, nil
 		}
 		return prepared{}, fmt.Errorf("%s exists but is not a worktree of %s", checkout, full)
 	}
-	if gitx.BranchExists(source, group.Branch) {
-		_, err = gitx.Run(source, "worktree", "add", checkout, group.Branch)
+	if spec.Branch != "" {
+		err = addBranchWorktree(source, checkout, base, spec, create)
+	} else if gitx.BranchExists(source, branch) {
+		_, err = gitx.Run(source, "worktree", "add", checkout, branch)
 	} else {
-		_, err = gitx.Run(source, "worktree", "add", "--no-track", "-b", group.Branch, checkout, base)
+		_, err = gitx.Run(source, "worktree", "add", "--no-track", "-b", branch, checkout, base)
 	}
 	if err != nil {
 		return prepared{}, err
@@ -105,6 +163,7 @@ func runSetup(entry *manifest.RepoEntry, command string, group *manifest.Group) 
 		"WB_REPO="+entry.Repo,
 		"WB_WORKBENCH="+group.Workbench,
 		"WB_WORKTREE="+group.Slug,
+		"WB_BRANCH="+entry.Branch,
 	)
 	out, err := cmd.CombinedOutput()
 	if err == nil {
@@ -132,33 +191,46 @@ type Added struct {
 }
 
 // AddRepos checks out repos into the group, saves the manifest, then runs setup.
+// With create, a requested branch that exists nowhere is started from the base.
 // It returns the requested repos that are now in the group, and true when everything succeeded.
-func AddRepos(cfg *config.Config, group *manifest.Group, repos []string, baseOpt string, report Report) ([]Added, bool, error) {
+func AddRepos(cfg *config.Config, group *manifest.Group, repos []RepoSpec, baseOpt string, create bool, report Report) ([]Added, bool, error) {
 	root := group.Root
-	var todo []string
+	var todo []RepoSpec
 	var added []Added
-	seen := map[string]bool{}
-	for _, full := range repos {
-		if seen[full] {
+	ok := true
+	seen := map[string]RepoSpec{}
+	for _, spec := range repos {
+		if previous, dup := seen[spec.Repo]; dup {
+			if spec.Branch != "" && previous.Branch != "" && spec != previous {
+				return nil, false, fmt.Errorf("%s is requested twice with different branches", spec.Repo)
+			}
 			continue
 		}
-		seen[full] = true
-		if entry := group.Entry(full); entry != nil {
-			report(fmt.Sprintf("= %s (already present)", full))
+		seen[spec.Repo] = spec
+		if entry := group.Entry(spec.Repo); entry != nil {
+			if spec.Branch != "" && spec.Branch != entry.Branch {
+				ok = false
+				report(fmt.Sprintf("✗ %s: already in this worktree on branch %s, not %s", spec.Repo, entry.Branch, spec.Branch))
+				continue
+			}
+			report(fmt.Sprintf("= %s (already present)", spec.Repo))
 			added = append(added, Added{entry, false})
 			continue
 		}
-		todo = append(todo, full)
+		todo = append(todo, spec)
 	}
 	if len(todo) == 0 {
-		return added, true, nil
+		return added, ok, nil
 	}
 
 	all := make([]string, 0, len(group.Repos)+len(todo))
 	for _, entry := range group.Repos {
 		all = append(all, entry.Repo)
 	}
-	folders := names.CheckoutNames(append(all, todo...))
+	for _, spec := range todo {
+		all = append(all, spec.Repo)
+	}
+	folders := names.CheckoutNames(all)
 	if err := pool.EnsureIgnore(filepath.Join(root, manifest.WorktreesDir)); err != nil {
 		return nil, false, err
 	}
@@ -170,26 +242,27 @@ func AddRepos(cfg *config.Config, group *manifest.Group, repos []string, baseOpt
 	}
 
 	results := map[string]prepared{}
-	ok := true
-	for outcome := range parallel.Run(todo, parallel.DefaultWorkers, func(full string) (prepared, error) {
-		return addCheckout(root, cfg, group, full, filepath.Join(group.Directory(), folders[full]), baseOpt)
+	for outcome := range parallel.Run(todo, parallel.DefaultWorkers, func(spec RepoSpec) (prepared, error) {
+		return addCheckout(root, cfg, group, spec, filepath.Join(group.Directory(), folders[spec.Repo]), baseOpt, create)
 	}) {
+		full := outcome.Item.Repo
 		if outcome.Err != nil {
 			ok = false
-			report(fmt.Sprintf("✗ %s: %v", outcome.Item, outcome.Err))
+			report(fmt.Sprintf("✗ %s: %v", full, outcome.Err))
 			continue
 		}
-		results[outcome.Item] = outcome.Value
+		results[full] = outcome.Value
 		rel, _ := filepath.Rel(root, outcome.Value.entry.Checkout)
 		if outcome.Value.created {
-			report(fmt.Sprintf("+ %s → %s (%.0fs)", outcome.Item, rel, outcome.Elapsed.Seconds()))
+			report(fmt.Sprintf("+ %s → %s on %s (%.0fs)", full, rel, outcome.Value.entry.Branch, outcome.Elapsed.Seconds()))
 		} else {
-			report(fmt.Sprintf("= %s → %s (already present)", outcome.Item, rel))
+			report(fmt.Sprintf("= %s → %s (already present)", full, rel))
 		}
 	}
 
 	var fresh []*manifest.RepoEntry
-	for _, full := range todo {
+	for _, spec := range todo {
+		full := spec.Repo
 		result, present := results[full]
 		if !present {
 			continue
@@ -312,7 +385,7 @@ func RemoveRepos(group *manifest.Group, selected []*manifest.RepoEntry, force bo
 	}
 	result.Deleted = true
 	if manifest.Delete(group) {
-		report(fmt.Sprintf("worktree %s removed (branch %s kept)", group.Slug, group.Branch))
+		report(fmt.Sprintf("worktree %s removed (branches kept)", group.Slug))
 	} else {
 		report(fmt.Sprintf("note: %s still has content and was left in place", group.Directory()))
 	}

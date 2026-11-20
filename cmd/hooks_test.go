@@ -19,6 +19,7 @@ type hookPayload struct {
 		Name     string `json:"name"`
 		Checkout string `json:"checkout"`
 		Base     string `json:"base"`
+		Branch   string `json:"branch"`
 		Created  bool   `json:"created"`
 	} `json:"repos"`
 }

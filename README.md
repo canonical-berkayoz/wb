@@ -5,7 +5,7 @@ Manage a pool of git repositories and the work that spans them.
 - **Repo pool**: every repo is cloned once, at `<root>/<owner>/<repo>`.
 - **Workbench**: one file in `<root>/.wb/workbenches/<name>.yaml` listing repos. A named, possibly
   overlapping view over the pool that sets defaults (repos offered, branch prefix).
-- **Worktree**: a named set of git worktrees on one shared branch, one per repo, under
+- **Worktree**: a named group of git worktrees, one per repo, each on its own branch, under
   `<root>/.worktrees/<name>/`. It can include any pool repo, not only the workbench's.
 
 ## Install
@@ -28,7 +28,7 @@ wb clone [REPO...] [--all] [--add]       # clone missing repos (parallel)
 wb sync [REPO...] [--all]                # fetch; fast-forward clean default branches
 
 wb worktree create NAME                  # start here: empty worktree (folder + branch name), no repos yet
-wb worktree add NAME [REPO...] [--base REF]   # add repos as you decide on them (creates NAME if missing)
+wb worktree add NAME [REPO[@BRANCH|@REMOTE:BRANCH]...] [--base REF] [--create]   # add repos as you decide on them (creates NAME if missing)
 wb worktree list                         # dirty/ahead/behind per repo, untracked git worktrees
 wb worktree path [NAME] [REPO]           # cd "$(wb worktree path NAME REPO)"
 wb worktree remove [NAME] [REPO...] [--force]  # remove checkouts (branches are kept)
@@ -44,6 +44,26 @@ must not contain spaces (use dashes); `wb` rejects them.
 You don't need to know the repos up front: create the worktree first, then decide which repos
 belong to it and add each with `wb worktree add NAME REPO...` as you discover it. (`add` on a
 missing worktree creates it, so `wb worktree add NAME api web` is a shortcut when you already know.)
+
+### Continuing existing branches
+
+A worktree is a named group (the folder); the branch is a property of each repo in it:
+
+| Argument               | Branch                                                                                         |
+|------------------------|------------------------------------------------------------------------------------------------|
+| `REPO`                 | a new branch named after the worktree (after `branch_prefix`), from the default branch         |
+| `REPO@BRANCH`          | exactly `BRANCH` (case kept, no prefix): the local branch, or one created from `origin/BRANCH` with that upstream, so `git push` updates the PR |
+| `REPO@REMOTE:BRANCH`   | the same, taking `BRANCH` from the git remote `REMOTE` (e.g. a fork)                           |
+
+```sh
+wb worktree add fix/ingress api@Fix/Ingress-Timeout web@fix-ingress-ui lib
+```
+
+A `BRANCH` that exists neither locally nor on the remote is an error, so typos fail loudly; pass
+`--create` to start it from the base instead. `wb` only runs git: look up branch names with `gh`
+and add fork remotes yourself (`git -C <root>/owner/repo remote add NAME URL`). A repo already in
+the worktree on another branch is refused. Each repo's branch is stored in the worktree state and
+passed to hooks and `setup`.
 
 | Flag / env                        | Meaning                                                           |
 |-----------------------------------|-------------------------------------------------------------------|
@@ -65,7 +85,7 @@ repositories:
 ```
 
 Per-repo settings are merged across workbenches; conflicting values are a config error. Setup
-runs with `WB_SOURCE`, `WB_CHECKOUT`, `WB_REPO`, `WB_WORKBENCH` and `WB_WORKTREE` set.
+runs with `WB_SOURCE`, `WB_CHECKOUT`, `WB_REPO`, `WB_WORKBENCH`, `WB_WORKTREE` and `WB_BRANCH` (the repo's branch) set.
 
 ## Hooks
 
@@ -105,7 +125,7 @@ Every hook gets these environment variables:
 | `WB_WORKBENCH`    | workbench name, empty if none                                                               |
 | `WB_WORKTREE`     | worktree name, e.g. `feat/add-rate-limiting`                                                |
 | `WB_WORKTREE_DIR` | absolute worktree root, e.g. `<root>/.worktrees/feat-add-rate-limiting`                     |
-| `WB_BRANCH`       | full branch name, including the workbench `branch_prefix`                                   |
+| `WB_BRANCH`       | the worktree's default branch for new repos, including the workbench `branch_prefix`; per-repo branches are in the JSON `repos[].branch` |
 | `WB_REPOS`        | space-separated `owner/repo` names affected by this call: newly added (`post_worktree_repo_add`), removed (`post_worktree_repo_remove`), empty for `post_worktree_create` and `post_worktree_delete` |
 
 The same data arrives as JSON on stdin, with the structured details of each repo:
@@ -119,7 +139,7 @@ The same data arrives as JSON on stdin, with the structured details of each repo
   "worktree_dir": "/abs/root/.worktrees/feat-add-rate-limiting",
   "branch": "dev/feat/add-rate-limiting",
   "repos": [
-    {"name": "acme/api", "checkout": "/abs/root/.worktrees/feat-add-rate-limiting/api", "base": "origin/main", "created": true}
+    {"name": "acme/api", "checkout": "/abs/root/.worktrees/feat-add-rate-limiting/api", "base": "origin/main", "branch": "dev/feat/add-rate-limiting", "created": true}
   ]
 }
 ```

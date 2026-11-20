@@ -9,7 +9,7 @@ description: 'Use the `wb` CLI to manage a pool of git repositories, workbenches
 
 - **Pool**: every repo is cloned once, at `<root>/<owner>/<repo>`. Never clone repos by hand into the root; use `wb clone`.
 - **Workbench**: one file `<root>/.wb/workbenches/<name>.yaml` listing repos. A named, possibly overlapping view over the pool. It decides which repos `clone`/`sync` act on by default and sets the branch prefix.
-- **Worktree**: a named set of git worktrees on one shared branch, one per repo, at `<root>/.worktrees/<name>/<repo>/`. It starts empty (`worktree create`) and grows as you decide which repos the change touches; it may include any pool repo, not only the workbench's. State lives in `<root>/.worktrees/<name>/.wb-worktree.json`; do not edit it by hand.
+- **Worktree**: a named group of git worktrees, one per repo, each on its own branch (a new one named after the worktree by default, or an existing one, e.g. an open PR's), at `<root>/.worktrees/<name>/<repo>/`. It starts empty (`worktree create`) and grows as you decide which repos the change touches; it may include any pool repo, not only the workbench's. State lives in `<root>/.worktrees/<name>/.wb-worktree.json`; do not edit it by hand.
 - **Root**: the folder containing `.wb/`. Found from `-R/--root`, `$WB_ROOT`, or by walking up from the cwd.
 
 ## Rules for agents (read first)
@@ -36,10 +36,10 @@ Global flags (accepted anywhere): `-w/--workbench NAME` (env `WB_WORKBENCH`), `-
 | `wb clone [REPO...] [--all] [--add]` | Clone missing repos in parallel. Default: the workbench's repos. `--all`: whole pool. `--add`: allow `owner/repo` not in any workbench. |
 | `wb sync [REPO...] [--all]` | `git fetch --prune`; fast-forward the default branch only when clean and not diverged. |
 | `wb worktree create NAME` | **Start here.** Create the worktree folder, manifest and branch name with no repos. Fires `post_worktree_create`. |
-| `wb worktree add NAME [REPO...] [--base REF] [--add]` | Add repos to the worktree (creating it if missing); idempotent. Fires `post_worktree_create` (if it created the worktree), then `post_worktree_repo_add` (if a repo was newly added). |
-| `wb worktree list` | Per-repo `dirty N` / `clean`, `↑ahead ↓behind vs <base>`, plus "untracked worktrees" not created by wb. With `-w`, only that workbench's worktrees. |
+| `wb worktree add NAME [REPO[@BRANCH \| @REMOTE:BRANCH]...] [--base REF] [--add] [--create]` | Add repos to the worktree (creating it if missing); idempotent. `REPO@BRANCH` continues an existing branch (see "Continue existing branches"). Fires `post_worktree_create` (if it created the worktree), then `post_worktree_repo_add` (if a repo was newly added). |
+| `wb worktree list` | Per-repo `dirty N` / `clean`, `↑ahead ↓behind vs <base>` (plus `(branch X)` when repos are not all on the worktree's branch), plus "untracked worktrees" not created by wb. With `-w`, only that workbench's worktrees. |
 | `wb worktree path NAME [REPO]` | Print the worktree folder, or one checkout. |
-| `wb worktree remove NAME [REPO...] [--force]` | Remove checkouts; dirty ones are kept unless `--force`. Branch is kept. Fires `post_worktree_repo_remove` for removed repos, then `post_worktree_delete` if the worktree is gone. Works on worktrees with no repos. |
+| `wb worktree remove NAME [REPO...] [--force]` | Remove checkouts; dirty ones are kept unless `--force`. Branches are kept. Fires `post_worktree_repo_remove` for removed repos, then `post_worktree_delete` if the worktree is gone. Works on worktrees with no repos. |
 
 `REPO` is `owner/repo`, or just `repo` when the name is unique in the pool. If two repos share a name, use `owner/repo`; inside a worktree they get folders `<owner>-<repo>`.
 
@@ -71,6 +71,29 @@ cd "$(wb worktree path feat/add-rate-limiting api)"       #    work in its check
 ```
 
 Create the worktree first, then decide which repos belong to it as you learn what the change touches. Do not guess the full repo list up front. Repeat step 3 for every further repo (even from another workbench, e.g. `shared/lib`); `add` is idempotent (`= repo (already present)`), and several repos can be given at once (`worktree add NAME api web`). `add` also creates a missing worktree, so `worktree add NAME REPO...` is a shortcut when you already know the repos. An empty worktree shows `(no repos yet)` in `worktree list`; `worktree remove NAME` deletes it.
+
+### Continue existing branches
+
+Use this to continue work that already has a branch (e.g. an open PR) instead of starting a new one. The worktree `NAME` is only the group (folder); each repo has its own branch, so one worktree can mix repos on different branches. `wb` only runs git and does not look branches up: you need the exact branch name per repo (and the remote name if it lives on a fork).
+
+| Argument | Branch |
+|---|---|
+| `REPO` | New branch `<branch_prefix><NAME>` from the default branch (as before). |
+| `REPO@BRANCH` | Exactly `BRANCH` (case kept, no `branch_prefix`): the local branch if it exists, else a local branch created from `origin/BRANCH` with that upstream, so a plain `git push` updates the PR. |
+| `REPO@REMOTE:BRANCH` | The same, taking `BRANCH` from the git remote `REMOTE` (e.g. a fork). |
+
+```sh
+wb -w platform worktree add fix/ingress api@Fix/Ingress-Timeout web@fix-ingress-ui   # existing branches, exact spelling
+wb worktree add fix/ingress lib                                                       # plain repo: new branch fix/ingress
+wb worktree add fix/ingress docs@fix-docs --create                                    # branch does not exist yet: create it
+git -C <root>/owner/repo remote add contrib https://github.com/contrib/repo.git   # fork: add the remote with git first
+wb worktree add fix/ingress repo@contrib:their-branch
+```
+
+- A branch that exists neither locally nor on the remote is an error, so typos fail loudly. Pass `--create` only when you mean to start a new branch with that exact name from the base.
+- `wb` never adds remotes. For `REPO@REMOTE:BRANCH`, add the remote in the pool clone (`<root>/<owner>/<repo>`) with git first.
+- A repo already in the worktree on a different branch is refused; `worktree remove NAME REPO` it first to switch.
+- Each repo's branch is recorded in the worktree state and passed to hooks and `setup`.
 
 ### Check progress
 
@@ -116,15 +139,15 @@ repositories:
 
 Only `repositories` is required. Per-repo settings are merged across workbenches; the same repo with different `default_branch` or `setup` in two files is a config error naming both files. Unknown keys are errors.
 
-`setup` runs with cwd = the new checkout and env `WB_SOURCE`, `WB_CHECKOUT`, `WB_REPO`, `WB_WORKBENCH`, `WB_WORKTREE`. A failing setup prints the last 15 lines, exits `1`, and does not stop other repos.
+`setup` runs with cwd = the new checkout and env `WB_SOURCE`, `WB_CHECKOUT`, `WB_REPO`, `WB_WORKBENCH`, `WB_WORKTREE`, `WB_BRANCH` (the repo's branch). A failing setup prints the last 15 lines, exits `1`, and does not stop other repos.
 
 ## Hooks
 
 The user may configure shell hooks under `hooks:` in `$XDG_CONFIG_HOME/wb/config.yaml` (default `~/.config/wb/config.yaml`) and `<root>/.wb/config.yaml`; the project file overrides the user file per key (`post_worktree_create`, `post_worktree_delete`, `post_worktree_repo_add`, `post_worktree_repo_remove`). They run with the worktree root as cwd (the root once the folder is gone) after the state changes, so a failing hook makes `wb` exit 1 but never undoes checkouts or removals: do not retry the `wb` command, fix the hook.
 
 - `post_worktree_repo_add` runs once per `worktree add` call, so repos added over several calls fire it several times, each time for just that call's new repos. It does not run if nothing new was added.
-- Env for every hook: `WB_HOOK`, `WB_ROOT`, `WB_WORKBENCH`, `WB_WORKTREE` (name, e.g. `feat/x`), `WB_WORKTREE_DIR` (absolute), `WB_BRANCH` (with prefix), `WB_REPOS` (space-separated `owner/repo`; new repos for `post_worktree_repo_add`, removed for `post_worktree_repo_remove`, empty for `post_worktree_create`/`post_worktree_delete`).
-- Stdin is JSON: `hook`, `root`, `workbench`, `worktree`, `worktree_dir`, `branch`, `repos[]` (`name`, `checkout`, `base`, `created`). `post_worktree_repo_add` also lists already present repos with `created: false`; `post_worktree_repo_remove` sets `checkout` to the removed path.
+- Env for every hook: `WB_HOOK`, `WB_ROOT`, `WB_WORKBENCH`, `WB_WORKTREE` (name, e.g. `feat/x`), `WB_WORKTREE_DIR` (absolute), `WB_BRANCH` (the worktree's default branch for new repos, with prefix; per-repo branches are in the JSON), `WB_REPOS` (space-separated `owner/repo`; new repos for `post_worktree_repo_add`, removed for `post_worktree_repo_remove`, empty for `post_worktree_create`/`post_worktree_delete`).
+- Stdin is JSON: `hook`, `root`, `workbench`, `worktree`, `worktree_dir`, `branch`, `repos[]` (`name`, `checkout`, `base`, `branch`, `created`). `post_worktree_repo_add` also lists already present repos with `created: false`; `post_worktree_repo_remove` sets `checkout` to the removed path.
 
 ## Troubleshooting
 
@@ -132,6 +155,7 @@ The user may configure shell hooks under `hooks:` in `$XDG_CONFIG_HOME/wb/config
 |---|---|
 | `could not find a root …` | Run from inside the root, or pass `-R DIR` / set `WB_ROOT`. |
 | `unknown workbench "x" (known: …)` | Check `wb list`; names are file names without `.yaml`. |
+| `branch "x" does not exist locally or on origin` | Typo, or the branch is on a fork: add the fork remote with git and use `repo@remote:branch`; use `--create` only to start a new branch. |
 | `x is not in the pool; pass --add …` | The repo is in no workbench and not cloned. Use `--add` (clone) / `--add` (worktree add) only if the user wants it. |
 | `"x" is ambiguous …` | Two pool repos share a name; use `owner/repo`. |
 | `<file>: unknown hook …` / `invalid YAML` | A hook config file (`.wb/config.yaml` or the user config) is invalid; fix it, nothing was changed. |

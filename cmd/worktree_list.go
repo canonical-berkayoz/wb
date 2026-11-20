@@ -32,13 +32,25 @@ var worktreeListCmd = &cobra.Command{
 			fmt.Fprintln(env.out, "no worktrees")
 		}
 		for _, group := range shown {
-			fmt.Fprintf(env.out, "%s  [%s]  branch %s\n", group.Slug, group.Workbench, group.Branch)
+			custom := false
+			for _, entry := range group.Repos {
+				custom = custom || entry.Branch != group.Branch
+			}
+			if custom {
+				fmt.Fprintf(env.out, "%s  [%s]\n", group.Slug, group.Workbench)
+			} else {
+				fmt.Fprintf(env.out, "%s  [%s]  branch %s\n", group.Slug, group.Workbench, group.Branch)
+			}
 			if len(group.Repos) == 0 {
 				fmt.Fprintln(env.out, "  (no repos yet)")
 			}
 			for _, entry := range group.Repos {
 				changes, divergence := worktree.RepoStatus(entry)
-				fmt.Fprintf(env.out, "  %-40s %-9s %s\n", entry.Repo, changes, divergence)
+				if custom {
+					fmt.Fprintf(env.out, "  %-40s %-9s %s  (branch %s)\n", entry.Repo, changes, divergence, entry.Branch)
+				} else {
+					fmt.Fprintf(env.out, "  %-40s %-9s %s\n", entry.Repo, changes, divergence)
+				}
 			}
 		}
 		if untracked := worktree.UntrackedWorktrees(env.rootDir, cfg, groups); len(untracked) > 0 {

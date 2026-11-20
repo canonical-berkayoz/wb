@@ -25,9 +25,11 @@ type RepoEntry struct {
 	Checkout string
 	Source   string
 	Base     string
+	Branch   string // the branch checked out in this repo
 }
 
-// Group is a named set of same-branch worktrees across repos, tracked by one manifest.
+// Group is a named set of worktrees across repos, tracked by one manifest. Branch
+// is the branch new repos get when none is requested; each repo records its own.
 type Group struct {
 	Root      string
 	Name      string // as given by the user, e.g. feat/add-rate-limiting
@@ -84,6 +86,7 @@ type repoJSON struct {
 	Checkout string `json:"checkout"`
 	Source   string `json:"source"`
 	Base     string `json:"base"`
+	Branch   string `json:"branch,omitempty"`
 }
 
 type groupJSON struct {
@@ -114,6 +117,7 @@ func Save(g *Group) error {
 			Checkout: relative(g.Root, entry.Checkout),
 			Source:   relative(g.Root, entry.Source),
 			Base:     entry.Base,
+			Branch:   entry.Branch,
 		})
 	}
 	encoded, err := json.MarshalIndent(data, "", "  ")
@@ -148,8 +152,12 @@ func Load(root, slug string) (*Group, error) {
 		group.Name = group.Slug // manifests written before names were recorded
 	}
 	for _, r := range data.Repos {
+		branch := r.Branch
+		if branch == "" {
+			branch = group.Branch // manifests written before branches were per repo
+		}
 		group.Repos = append(group.Repos, &RepoEntry{
-			Repo: r.Repo, Checkout: absolute(root, r.Checkout), Source: absolute(root, r.Source), Base: r.Base,
+			Repo: r.Repo, Checkout: absolute(root, r.Checkout), Source: absolute(root, r.Source), Base: r.Base, Branch: branch,
 		})
 	}
 	return group, nil

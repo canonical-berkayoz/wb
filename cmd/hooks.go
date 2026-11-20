@@ -43,7 +43,7 @@ func (e *Env) runHooks(events ...hooks.Event) bool {
 func addedRepos(added []worktree.Added) []hooks.Repo {
 	repos := make([]hooks.Repo, len(added))
 	for i, item := range added {
-		repos[i] = hooks.Repo{Name: item.Entry.Repo, Checkout: item.Entry.Checkout, Base: item.Entry.Base, Created: item.Created}
+		repos[i] = hooks.Repo{Name: item.Entry.Repo, Checkout: item.Entry.Checkout, Base: item.Entry.Base, Branch: item.Entry.Branch, Created: item.Created}
 	}
 	return repos
 }
@@ -51,7 +51,7 @@ func addedRepos(added []worktree.Added) []hooks.Repo {
 func removedRepos(entries []*manifest.RepoEntry) []hooks.Repo {
 	repos := make([]hooks.Repo, len(entries))
 	for i, entry := range entries {
-		repos[i] = hooks.Repo{Name: entry.Repo, Checkout: entry.Checkout, Base: entry.Base}
+		repos[i] = hooks.Repo{Name: entry.Repo, Checkout: entry.Checkout, Base: entry.Base, Branch: entry.Branch}
 	}
 	return repos
 }

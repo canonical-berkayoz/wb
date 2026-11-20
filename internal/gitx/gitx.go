@@ -102,6 +102,11 @@ func BranchExists(repo, branch string) bool {
 	return succeeds(repo, "show-ref", "--verify", "--quiet", "refs/heads/"+branch)
 }
 
+// Remotes lists the configured remote names of a repo.
+func Remotes(repo string) []string {
+	return strings.Fields(output(repo, "remote"))
+}
+
 // AheadBehind returns how many commits HEAD is ahead of / behind ref; ok is
 // false when ref cannot be resolved.
 func AheadBehind(repo, ref string) (ahead, behind int, ok bool) {
